@@ -1,0 +1,30 @@
+name: Test Docker Runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: [self-hosted, Windows, X64, docker-desktop]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check Docker
+        shell: powershell
+        run: |
+          docker version
+
+      - name: Check Docker Engine
+        shell: powershell
+        run: |
+          docker info
+
+      - name: List containers
+        shell: powershell
+        run: |
+          docker ps
