@@ -1,32 +1,237 @@
-name: Test Docker Runner
+name: Portfolio CI/CD
 
 on:
   push:
     branches:
       - main
 
-permissions:
-  contents: read
+  workflow_dispatch:
+
+concurrency:
+  group: portfolio-production
+  cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: [self-hosted, Windows, X64]
+
+  build-test-deploy:
+
+    name: Build, Test & Deploy
+
+    runs-on:
+      - self-hosted
+      - windows
+      - x64
+
+    permissions:
+      contents: read
+
+    env:
+      IMAGE_NAME: portfolio
+      CONTAINER_NAME: portfolio
+      TEST_CONTAINER_NAME: portfolio-test
+      TEST_PORT: 18080
+      PRODUCTION_PORT: 8080
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
 
-      - name: Check Docker
+      # ------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------
+      # 2. Show environment
+      # ------------------------------------------------
+
+      - name: Verify Docker
         shell: powershell
         run: |
           docker version
-
-      - name: Check Docker Engine
-        shell: powershell
-        run: |
           docker info
 
-      - name: List containers
+      # ------------------------------------------------
+      # 3. Validate required files
+      # ------------------------------------------------
+
+      - name: Validate project structure
         shell: powershell
         run: |
-          docker ps
+          $requiredFiles = @(
+            "index.html",
+            "Dockerfile",
+            "nginx.conf",
+            "assets/css/style.css",
+            "assets/js/data.js",
+            "assets/js/main.js",
+            "assets/js/chat-widget.js"
+          )
+
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path $file)) {
+              throw "Required file missing: $file"
+            }
+
+            Write-Host "Found: $file"
+          }
+
+      # ------------------------------------------------
+      # 4. Build Docker image
+      # ------------------------------------------------
+
+      - name: Build Docker image
+        shell: powershell
+        run: |
+          docker build `
+            --pull `
+            -t "${env:IMAGE_NAME}:${env:GITHUB_SHA}" `
+            -t "${env:IMAGE_NAME}:latest" `
+            .
+
+      # ------------------------------------------------
+      # 5. Validate nginx configuration
+      # ------------------------------------------------
+
+      - name: Validate Nginx configuration
+        shell: powershell
+        run: |
+          docker run --rm `
+            "${env:IMAGE_NAME}:${env:GITHUB_SHA}" `
+            nginx -t
+
+      # ------------------------------------------------
+      # 6. Start temporary test container
+      # ------------------------------------------------
+
+      - name: Start test container
+        shell: powershell
+        run: |
+          docker rm -f "${env:TEST_CONTAINER_NAME}" 2>$null
+
+          docker run -d `
+            --name "${env:TEST_CONTAINER_NAME}" `
+            -p "127.0.0.1:${env:TEST_PORT}:80" `
+            "${env:IMAGE_NAME}:${env:GITHUB_SHA}"
+
+      # ------------------------------------------------
+      # 7. Wait for container
+      # ------------------------------------------------
+
+      - name: Wait for test container
+        shell: powershell
+        run: |
+          $maxAttempts = 20
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+            try {
+              $response = Invoke-WebRequest `
+                -Uri "http://127.0.0.1:${env:TEST_PORT}/" `
+                -UseBasicParsing `
+                -TimeoutSec 3
+
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Portfolio is responding"
+                exit 0
+              }
+            }
+            catch {
+              Write-Host "Waiting for Nginx... attempt $i/$maxAttempts"
+            }
+
+            Start-Sleep -Seconds 2
+          }
+
+          docker logs "${env:TEST_CONTAINER_NAME}"
+
+          throw "Test container did not become healthy"
+
+      # ------------------------------------------------
+      # 8. Smoke test
+      # ------------------------------------------------
+
+      #- name: Run smoke tests
+      #  shell: powershell
+      #  run: |
+      #    .\tests\smoke-test.ps1 `
+       #     -Url "http://127.0.0.1:${env:TEST_PORT}"
+
+      # ------------------------------------------------
+      # 9. Cleanup test container
+      # ------------------------------------------------
+
+      #- name: Remove test container
+      #  if: always()
+      #  shell: powershell
+      #  run: |
+      #    docker rm -f "${env:TEST_CONTAINER_NAME}" 2>$null
+
+      # ------------------------------------------------
+      # 10. Deploy
+      # ------------------------------------------------
+
+      - name: Deploy portfolio
+        shell: powershell
+        run: |
+          Write-Host "Stopping existing portfolio container..."
+
+          docker rm -f "${env:CONTAINER_NAME}" 2>$null
+
+          Write-Host "Starting new portfolio container..."
+
+          docker run -d `
+            --name "${env:CONTAINER_NAME}" `
+            --restart unless-stopped `
+            -p "127.0.0.1:${env:PRODUCTION_PORT}:80" `
+            "${env:IMAGE_NAME}:${env:GITHUB_SHA}"
+
+      # ------------------------------------------------
+      # 11. Verify production deployment
+      # ------------------------------------------------
+
+      - name: Verify production deployment
+        shell: powershell
+        run: |
+          $maxAttempts = 15
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+            try {
+              $response = Invoke-WebRequest `
+                -Uri "http://127.0.0.1:${env:PRODUCTION_PORT}/" `
+                -UseBasicParsing `
+                -TimeoutSec 3
+
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Production deployment successful"
+                exit 0
+              }
+            }
+            catch {
+              Write-Host "Waiting for production container... $i/$maxAttempts"
+            }
+
+            Start-Sleep -Seconds 2
+          }
+
+          docker logs "${env:CONTAINER_NAME}"
+
+          throw "Production deployment verification failed"
+
+      # ------------------------------------------------
+      # 12. Show container
+      # ------------------------------------------------
+
+      - name: Deployment summary
+        shell: powershell
+        run: |
+          docker ps --filter "name=${env:CONTAINER_NAME}"
+
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host " Portfolio deployment successful"
+          Write-Host " Commit: ${env:GITHUB_SHA}"
+          Write-Host " Container: ${env:CONTAINER_NAME}"
+          Write-Host " Port: ${env:PRODUCTION_PORT}"
+          Write-Host "======================================"
