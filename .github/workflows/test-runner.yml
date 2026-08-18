@@ -26,9 +26,10 @@ jobs:
       contents: read
 
     env:
-      IMAGE_NAME: portfolio
-      CONTAINER_NAME: portfolio
-      TEST_CONTAINER_NAME: portfolio-test
+      IMAGE_NAME: vignesh-portfolio
+      VERSION: v${{ github.run_number }}
+      CONTAINER_NAME: vignesh-portfolio
+      TEST_CONTAINER_NAME: vignesh-portfolio-test
       TEST_PORT: 18080
       PRODUCTION_PORT: 8080
 
@@ -83,9 +84,13 @@ jobs:
       - name: Build Docker image
         shell: powershell
         run: |
+          Write-Host "Building image..."
+          Write-Host "Image: ${env:IMAGE_NAME}"
+          Write-Host "Version: ${env:VERSION}"
+
           docker build `
             --pull `
-            -t "${env:IMAGE_NAME}:${env:GITHUB_SHA}" `
+            -t "${env:IMAGE_NAME}:${env:VERSION}" `
             -t "${env:IMAGE_NAME}:latest" `
             .
 
@@ -97,7 +102,7 @@ jobs:
         shell: powershell
         run: |
           docker run --rm `
-            "${env:IMAGE_NAME}:${env:GITHUB_SHA}" `
+            "${env:IMAGE_NAME}:${env:VERSION}" `
             nginx -t
 
       # ------------------------------------------------
@@ -112,7 +117,7 @@ jobs:
        #   docker run -d `
        #     --name "${env:TEST_CONTAINER_NAME}" `
        #     -p "127.0.0.1:${env:TEST_PORT}:80" `
-       #     "${env:IMAGE_NAME}:${env:GITHUB_SHA}"
+       #     "${env:IMAGE_NAME}:${env:VERSION}"
 
       # ------------------------------------------------
       # 7. Wait for container
@@ -174,9 +179,13 @@ jobs:
       - name: Deploy portfolio
         shell: powershell
         run: |
-          Write-Host "Stopping existing portfolio container..."
-
-          docker rm -f "${env:CONTAINER_NAME}" 2>$null
+          if (docker ps -aq -f "name=${env:CONTAINER_NAME}") {
+            Write-Host "Existing portfolio container found. Stopping and removing..."
+            docker rm -f "${env:CONTAINER_NAME}" 2>$null
+          }
+          else {
+            Write-Host "No existing portfolio container found. Proceeding with deployment..."
+          }
 
           Write-Host "Starting new portfolio container..."
 
@@ -184,7 +193,7 @@ jobs:
             --name "${env:CONTAINER_NAME}" `
             --restart unless-stopped `
             -p "127.0.0.1:${env:PRODUCTION_PORT}:80" `
-            "${env:IMAGE_NAME}:${env:GITHUB_SHA}"
+            "${env:IMAGE_NAME}:${env:VERSION}"
 
       # ------------------------------------------------
       # 11. Verify production deployment
@@ -231,7 +240,7 @@ jobs:
           Write-Host ""
           Write-Host "======================================"
           Write-Host " Portfolio deployment successful"
-          Write-Host " Commit: ${env:GITHUB_SHA}"
+          Write-Host " Commit: ${env:VERSION}"
           Write-Host " Container: ${env:CONTAINER_NAME}"
           Write-Host " Port: ${env:PRODUCTION_PORT}"
           Write-Host "======================================"
